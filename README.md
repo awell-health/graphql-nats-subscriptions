@@ -1,16 +1,46 @@
 # graphql-nats-subscriptions
 
-This package implements the PusSubEngine Interface from the graphql-subscriptions package. 
-It allows you to connect your subscriptions manger to an NATS enabled Pub Sub broker to support 
+This package implements the PubSubEngine Interface from the graphql-subscriptions package. 
+It allows you to connect your subscriptions manager to a NATS enabled Pub Sub broker to support 
 horizontally scalable subscriptions setup.
-This package is an adapted version of [graphql-redis-subscriptions](https://github.com/davidyaha/graphql-redis-subscriptions) package.
-   
-   
+
+This is a modernized fork adapted from [graphql-redis-subscriptions](https://github.com/davidyaha/graphql-redis-subscriptions) package.
+
+## Requirements
+
+- Node.js >= 22.0.0  
+- NATS 1.4.x
+- TypeScript >= 5.0.0
+
+## Dependencies
+
+This package requires the following peer dependencies:
+
+- `graphql-subscriptions` ^2.0.0 
+- `nats` >=1.4.0 <2.0.0
+
+**Note:** `pino` is included as a direct dependency since logging is mandatory.
+
+## Installation
+
+```bash
+npm install graphql-nats-subscriptions graphql-subscriptions nats
+```
+
 ## Basic Usage
 
 ```javascript
 import { NatsPubSub } from 'graphql-nats-subscriptions';
-const pubsub = new NatsPubSub(); // connecting to nats://localhost on default
+import pino from 'pino';
+
+// Create a logger instance (required)
+const logger = pino({ level: 'info' });
+
+// Create PubSub instance
+const pubsub = new NatsPubSub({
+  logger: logger  // Required: pino.Logger instance
+}); // connecting to nats://localhost:4222 by default
+
 const subscriptionManager = new SubscriptionManager({
   schema,
   pubsub,
@@ -18,87 +48,132 @@ const subscriptionManager = new SubscriptionManager({
 });
 ```
 
-You needs `gnatsd daemon` running in background. Check out https://nats.io to start on your machine. 
-## Using Trigger Transform
+## Advanced Usage
 
-As the [graphql-redis-subscriptions](https://github.com/davidyaha/graphql-redis-subscriptions) package, this package support
-a trigger transform function. This trigger transform allows you to use the `channelOptions` object provided to the `SubscriptionManager`
-instance, and return trigger string which is more detailed then the regular trigger. 
+### With custom NATS connection
 
-First I create a simple and generic trigger transform 
-```javascript
-const triggerTransform = (trigger, {path}) => [trigger, ...path].join('.');
-```
-> Note that I expect a `path` field to be passed to the `channelOptions` but you can do whatever you want.
-
-Next, I'll pass the `triggerTransform` to the `NatsPubSub` constructor.
-```javascript
-const pubsub = new NatsPubSub({
-  triggerTransform,
-});
-```
-Lastly, I provide a setupFunction for `commentsAdded` subscription field.
-It specifies one trigger called `comments.added` and it is called with the `channelOptions` object that holds `repoName` path fragment.
-```javascript
-const subscriptionManager = new SubscriptionManager({
-  schema,
-  setupFunctions: {
-    commentsAdded: (options, {repoName}) => ({
-      'comments/added': {
-        channelOptions: { path: [repoName] },
-      },
-    }),
-  },
-  pubsub,
-});
-```
-> Note that here is where I satisfy my `triggerTransform` dependency on the `path` field.
-
-When I call `subscribe` like this:
-```javascript
-const query = `
-  subscription X($repoName: String!) {
-    commentsAdded(repoName: $repoName)
-  }
-`;
-const variables = {repoName: 'graphql-redis-subscriptions'};
-subscriptionManager.subscribe({ query, operationName: 'X', variables, callback });
-```
-
-The subscription string that Redis will receive will be `comments.added.graphql-redis-subscriptions`.
-This subscription string is much more specific and means the the filtering required for this type of subscription is not needed anymore.
-This is one step towards lifting the load off of the graphql api server regarding subscriptions.
-
-## Passing your own client object
-
-The basic usage is great for development and you will be able to connect to any nats enabled server running on your system seamlessly.
-But for any production usage you should probably pass in your own configured client object;
- 
 ```javascript
 import { connect } from 'nats';
 import { NatsPubSub } from 'graphql-nats-subscriptions';
+import pino from 'pino';
 
-const client = connect('nats://test.mosquitto.org', {
-  reconnectPeriod: 1000,
+const logger = pino({ level: 'debug' });
+const natsClient = connect({ 
+  url: 'nats://my-nats-server:4222',
+  // other NATS 1.4.x options
 });
 
 const pubsub = new NatsPubSub({
-  client,
+  client: natsClient,
+  logger: logger  // Required
 });
 ```
 
-You can learn more on the nats options object [here](https://github.com/nats-io/node-nats).
+### Using Trigger Transform
 
+As the [graphql-redis-subscriptions](https://github.com/davidyaha/graphql-redis-subscriptions) package, this package supports
+a trigger transform function. This trigger transform allows you to use the `channelOptions` object provided to the `SubscriptionManager`
+instance, and return trigger string which is more detailed than the regular trigger.
 
-## Change encoding used to encode and decode messages
+First create a simple and generic trigger transform:
+```javascript
+const triggerTransform = (trigger, {path}) => [trigger, ...path].join('.');
+```
 
-Supported encodings available [here](https://nodejs.org/api/buffer.html#buffer_buffers_and_character_encodings) 
+Note that the `path` field is expected to be passed to the `channelOptions`, but you can customize this as needed.
 
+Next, pass the `triggerTransform` to the `NatsPubSub` constructor:
 ```javascript
 const pubsub = new NatsPubSub({
-  parseMessageWithEncoding: 'utf16le',
+  triggerTransform,
+  logger: logger  // Required
 });
 ```
-### License
 
-graphql-nats-subscriptions is [open source](https://github.com/cdmbase/graphql-nats-subscriptions/blob/master/LICENSE.md) under the MIT license
+Lastly, provide a setupFunction for your subscription field that specifies the trigger and calls it with the `channelOptions` object containing `repoName`:
+
+```javascript
+const subscriptionManager = new SubscriptionManager({
+  schema,
+  pubsub,
+  setupFunctions: {
+    commentsAdded: (options, {repoName}) => ({
+      commentsAdded: {
+        channelOptions: {path: [repoName]},
+      },
+    }),
+  },
+});
+```
+
+## Logging
+
+This package **requires** [pino](https://github.com/pinojs/pino) for logging. The logger parameter is mandatory in the constructor.
+
+All log levels (trace, debug, info, warn, error, fatal) are supported. The library will create child loggers as needed.
+
+### Logger Usage
+
+The `logger` option requires a `pino.Logger` instance:
+
+```javascript
+import pino from 'pino';
+
+const logger = pino({
+  level: 'info',
+  transport: {
+    target: 'pino-pretty', // for development
+    options: {
+      colorize: true
+    }
+  }
+});
+
+const pubsub = new NatsPubSub({ 
+  logger: logger  // Required - will throw error if not provided
+});
+```
+
+## Changes from Original
+
+This modernized version includes:
+
+- **Updated to Node.js 22+** with modern TypeScript 5.x
+- **Mandatory pino logging** - ensures consistent, high-performance logging across all instances
+- **Updated to NATS 1.4.x** - compatible with your monorepo requirements  
+- **Modern tooling** - ESLint instead of deprecated TSLint, updated Jest
+- **Improved TypeScript** - strict mode enabled, better type safety
+- **Updated dependencies** - all packages updated to latest compatible versions
+
+## Migration from Original
+
+If you're migrating from the original package:
+
+1. **Update Node.js** to version 22+
+2. **Replace logger dependency**:
+   ```bash
+   npm uninstall @cdm-logger/core @cdm-logger/server
+   # pino is now included automatically as a dependency
+   ```
+3. **Update logger initialization** (now required):
+   ```javascript
+   // Before (optional)
+   import { ConsoleLogger } from '@cdm-logger/server';
+   const logger = ConsoleLogger.create('app', { level: 'trace' });
+   const pubsub = new NatsPubSub({ logger }); // optional
+   
+   // After (required)  
+   import pino from 'pino';
+   const logger = pino({ level: 'trace', name: 'app' });
+   const pubsub = new NatsPubSub({ logger }); // required
+   ```
+4. **Update NATS** to 1.4.x (if not already)
+5. **Update other dependencies** as shown in package.json
+
+## Requirements
+
+You need a `nats-server` running. Check out [NATS.io](https://nats.io) to get started on your machine.
+
+## License
+
+This package is licensed under the ISC License.

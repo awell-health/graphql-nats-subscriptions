@@ -1,9 +1,8 @@
 import { PubSubEngine } from 'graphql-subscriptions';
-import { connect, Client, ClientOpts, SubscribeOptions, NatsError } from 'nats';
+import { connect, Client, SubscribeOptions, NatsError } from 'nats';
+import type { Logger } from 'pino';
 import { PubSubAsyncIterator } from './pubsub-async-iterator';
 import _ from 'lodash';
-import { CdmLogger } from '@cdm-logger/core';
-type Logger = CdmLogger.ILogger;
 
 export type Path = Array<string | number>;
 export type Trigger = string | Path;
@@ -16,10 +15,9 @@ export interface NatsPubSubOptions {
     subscribeOptions?: SubscribeOptionsResolver;
     publishOptions?: PublishOptionsResolver;
     connectionListener?: (err: Error) => void;
-    // onNatsSubscribe?: (id: number, granted: ISubscriptionGrant[]) => void;
     triggerTransform?: TriggerTransform;
     parseMessageWithEncoding?: BufferEncoding;
-    logger?: Logger;
+    logger: Logger; // Made mandatory
 }
 
 export class NatsPubSub implements PubSubEngine {
@@ -36,9 +34,9 @@ export class NatsPubSub implements PubSubEngine {
     // { [topic]: { natsSid }}
     private natsSubMap: { [trigger: string]: number };
     private currentSubscriptionId: number;
-    private logger: Logger;
+    private logger: Logger; // Made mandatory
 
-    public constructor(options: NatsPubSubOptions = {}) {
+    public constructor(options: NatsPubSubOptions) {
         this.triggerTransform = options.triggerTransform || (trigger => trigger as string);
 
         if (options.client) {
@@ -58,14 +56,13 @@ export class NatsPubSub implements PubSubEngine {
             this.natsConnection.on('reconnect', options.connectionListener);
             this.natsConnection.on('close', options.connectionListener);
         } else {
-            this.natsConnection.on('error', this.logger && this.logger.error);
+            this.natsConnection.on('error', this.logger.error.bind(this.logger));
         }
 
         this.subscriptionMap = {};
         this.subsRefsMap = {};
         this.natsSubMap = {};
         this.currentSubscriptionId = 0;
-        // this.onNatsSubscribe = options.onNatsSubscribe || (() => null);
         this.publishOptionsResolver = options.publishOptions || (() => Promise.resolve({}));
         this.subscribeOptionsResolver = options.subscribeOptions || (() => Promise.resolve({}));
     }
@@ -92,33 +89,29 @@ export class NatsPubSub implements PubSubEngine {
             this.subsRefsMap[triggerName] = newRefs;
             return await id;
         } else {
-            // return new Promise<number>((resolve, reject) => {
             this.logger.trace('topic (%s) is new and yet to be subscribed', triggerName);
-            // 1. Resolve options object
-            // this.subscribeOptionsResolver(trigger, options).then(subscriptionOptions => {
             this.logger.trace('resolve subscriptionoptions with options (%j)', options);
             // 2. Subscribing using NATS
-            const subId = this.natsConnection.subscribe(triggerName, (msg) => this.onMessage(triggerName, msg));
+            const subId = this.natsConnection.subscribe(triggerName, (msg: any) => this.onMessage(triggerName, msg));
             this.subsRefsMap[triggerName] = [...(this.subsRefsMap[triggerName] || []), id];
             this.natsSubMap[triggerName] = subId;
             return await id;
-            // });
-            // });
-
         }
     }
 
-    public unsubscribe(subId: number) {
-        const [triggerName = null] = this.subscriptionMap[subId] || [];
-        const refs = this.subsRefsMap[triggerName];
-        const natsSubId = this.natsSubMap[triggerName];
+    public unsubscribe(subId: number): void {
+        const [triggerName] = this.subscriptionMap[subId] || [null];
+        const refs = this.subsRefsMap[triggerName || ''];
+        const natsSubId = this.natsSubMap[triggerName || ''];
         this.logger.trace("unsubscribing to queue '%s' and natsSid: (%s)", subId, natsSubId);
-        if (!refs) {
+        if (!refs || !triggerName) {
             this.logger.error('there are no subscriptions for triggerName (%s) and natsSid (%s)', triggerName, natsSubId);
             throw new Error(`There is no subscription of id "${subId}"`);
         }
         if (refs.length === 1) {
-            this.natsConnection.unsubscribe(natsSubId);
+            if (natsSubId !== undefined) {
+                this.natsConnection.unsubscribe(natsSubId);
+            }
             delete this.natsSubMap[triggerName];
             delete this.subsRefsMap[triggerName];
             this.logger.trace('unsubscribe on nats for subId (%s) is completed and there is no subscriber to topic (%s)',
@@ -138,7 +131,7 @@ export class NatsPubSub implements PubSubEngine {
         return new PubSubAsyncIterator<T>(this, triggers, this.logger);
     }
 
-    private onMessage(topic: string, message: string) {
+    private onMessage(topic: string, message: any): void {
         this.logger.trace('triggered onMessage with topic (%s), message (%j)', topic, message);
         const subscribers = this.subsRefsMap[topic];
 
@@ -153,11 +146,11 @@ export class NatsPubSub implements PubSubEngine {
         // console.log("received", msg + "here");
         // `TypeError: Cannot convert object to primitive value`
         // Note that simple `console.log(msg)` is fine.
-        if (message.hasOwnProperty('toString')) {
+        if (message?.hasOwnProperty?.('toString')) {
             console.warn('not suppose to have `toString` in payload, which likely trying to crash the server', message.toString);
             return;
         }
-        let parsedMessage;
+        let parsedMessage: any;
         try {
             parsedMessage = JSON.parse(message);
         } catch (e) {
@@ -165,9 +158,11 @@ export class NatsPubSub implements PubSubEngine {
         }
 
         for (const subId of subscribers) {
-            const listener = this.subscriptionMap[subId][1];
-            this.logger.trace('subscription listener to run for subId (%s)', subId);
-            listener(parsedMessage);
+            const listener = this.subscriptionMap[subId]?.[1];
+            if (listener) {
+                this.logger.trace('subscription listener to run for subId (%s)', subId);
+                listener(parsedMessage);
+            }
         }
     }
 }

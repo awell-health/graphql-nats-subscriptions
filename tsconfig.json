@@ -1,26 +1,35 @@
 {
     "compilerOptions": {
-        "target": "es6",
+        "target": "ES2020",
         "module": "commonjs",
+        "lib": ["ES2020"],
         "experimentalDecorators": true,
         "declaration": true,
         "removeComments": true,
-        "noImplicitAny": false,
-        "noLib": false,
+        "noImplicitAny": true,
+        "strict": true,
+        "noFallthroughCasesInSwitch": true,
+        "noImplicitReturns": true,
+        "noUncheckedIndexedAccess": true,
         "preserveConstEnums": false,
         "moduleResolution": "node",
         "sourceMap": true,
         "rootDir": "./src",
         "outDir": "./dist",
         "allowSyntheticDefaultImports": true,
+        "esModuleInterop": true,
+        "forceConsistentCasingInFileNames": true,
+        "skipLibCheck": true,
         "pretty": true,
-        "lib": [
-            "es2017",
-            "esnext.asynciterable"
-        ]
+        "resolveJsonModule": true
     },
+    "include": [
+        "src/**/*"
+    ],
     "exclude": [
         "node_modules",
-        "dist"
+        "dist",
+        "**/*.test.ts",
+        "**/*.spec.ts"
     ]
 }
